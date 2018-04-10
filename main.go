@@ -33,11 +33,12 @@ const (
 )
 
 type app struct {
-	clientID     string
-	clientSecret string
-	redirectURI  string
-	kubeconfig   string
-	debug        bool
+	clientID       string
+	clientSecret   string
+	redirectURI    string
+	kubeconfig     string
+	kubeconfigUser string
+	debug          bool
 
 	verifier *oidc.IDTokenVerifier
 	provider *oidc.Provider
@@ -224,6 +225,7 @@ func cmd() *cobra.Command {
 	c.Flags().StringVar(&rootCAs, "issuer-root-ca", "", "Root certificate authorities for the issuer. Defaults to host certs.")
 	c.Flags().BoolVar(&a.debug, "debug", false, "Print all request and responses from the OpenID Connect issuer.")
 	c.Flags().StringVar(&a.kubeconfig, "kubeconfig", "", "Kubeconfig file to configure")
+	c.Flags().StringVar(&a.kubeconfigUser, "kubeconfig-user", "", "Username to set credentials for in Kubeconfig file (uses 'email' from OIDC response by default)")
 	return &c
 }
 
@@ -332,6 +334,10 @@ func (a *app) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if a.kubeconfigUser == "" {
+		a.kubeconfigUser = m.Email
+	}
+
 	err = updateKubeConfig(rawIDToken, token.RefreshToken, m, a)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to update kubeconfig: %v", err), http.StatusInternalServerError)
@@ -342,7 +348,7 @@ func (a *app) handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	renderToken(w, a.redirectURI, rawIDToken, token.RefreshToken, buff.Bytes(), a.debug)
-	fmt.Printf("Login Succeeded as %s\n", m.Email)
+	fmt.Printf("Login Succeeded as %s\n", a.kubeconfigUser)
 	if a.debug {
 		fmt.Printf("ID Token: %s\n", rawIDToken)
 		fmt.Printf("Refresh Token: %s\n", token.RefreshToken)
@@ -396,7 +402,7 @@ func updateKubeConfig(IDToken string, refreshToken string, claims claim, a *app)
 	}
 
 	authInfo := k8s_api.NewAuthInfo()
-	if conf, ok := config.AuthInfos[claims.Email]; ok {
+	if conf, ok := config.AuthInfos[a.kubeconfigUser]; ok {
 		authInfo = conf
 	}
 
@@ -411,7 +417,7 @@ func updateKubeConfig(IDToken string, refreshToken string, claims claim, a *app)
 		},
 	}
 
-	config.AuthInfos[claims.Email] = authInfo
+	config.AuthInfos[a.kubeconfigUser] = authInfo
 
 	fmt.Printf("Writing config to %s\n", outputFilename)
 	err = k8s_client.WriteToFile(*config, outputFilename)
